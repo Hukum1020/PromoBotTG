@@ -122,6 +122,9 @@ def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("[INFO] Бот запущен.")
+    print("ACCESS_TOKEN:", ACCESS_TOKEN)
+    print("MEDIA_ID:", MEDIA_ID)
+
     app.run_polling()
 
 if __name__ == '__main__':

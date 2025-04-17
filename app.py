@@ -5,7 +5,7 @@ from openpyxl import load_workbook
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-# Переменные из окружения
+# Переменные окружения
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 MEDIA_ID = os.getenv("MEDIA_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -43,7 +43,7 @@ FAIL_MESSAGE = """😕 Ты не выполнил все условия.
 🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!
 """
 
-# Загружаем только свободные коды
+# Загрузка свободных промокодов
 def load_promo_codes():
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
@@ -55,7 +55,7 @@ def load_promo_codes():
     wb.close()
     return codes
 
-# Помечаем код как использованный
+# Пометка промокода как использованного
 def mark_code_as_used(code):
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
@@ -66,7 +66,7 @@ def mark_code_as_used(code):
     wb.save(EXCEL_FILE)
     wb.close()
 
-# Проверка комментария под постом
+# Проверка комментария пользователя в Instagram
 def has_user_commented(username):
     url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
     params = {
@@ -75,15 +75,24 @@ def has_user_commented(username):
         'limit': 100
     }
     while url:
-        response = requests.get(url, params=params)
-        data = response.json()
-        for comment in data.get('data', []):
-            if comment['username'].lower() == username.lower():
-                return True
-        url = data.get('paging', {}).get('next')
+        try:
+            print(f"[INFO] Запрос к Instagram API: {url}")
+            response = requests.get(url, params=params)
+            print(f"[INFO] Ответ: {response.status_code} | {response.text}")
+            data = response.json()
+
+            for comment in data.get('data', []):
+                if comment['username'].lower() == username.lower():
+                    print(f"[INFO] Комментарий найден от @{username}")
+                    return True
+
+            url = data.get('paging', {}).get('next')
+        except Exception as e:
+            print(f"[ERROR] Ошибка при обращении к Instagram API: {e}")
+            return False
     return False
 
-# Обработка сообщений Telegram
+# Обработка Telegram-сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("started"):
         await update.message.reply_text(START_MESSAGE)
@@ -112,6 +121,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("[INFO] Бот запущен.")
     app.run_polling()
 
 if __name__ == '__main__':

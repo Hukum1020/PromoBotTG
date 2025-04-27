@@ -8,8 +8,8 @@ import gspread
 from telegram import Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
     filters,
 )
@@ -31,7 +31,7 @@ SPREADSHEET_ID     = os.getenv("SHEET_ID")
 
 # --- Тексты ---
 START_MESSAGE = """Привет! 👋  
-Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🎁 
+Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🎁
 Каждый участник получает ПОДАРОК — промокод на скидку 10% на стандартный билет!
 Перед тем как выдать тебе промокод, давай проверим, что ты выполнил все условия 👇
 """
@@ -39,12 +39,11 @@ ASK_USERNAME = "Пожалуйста, отправь свой Instagram-никн
 SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены:
 • Подписка на @aviashow.kz  
 • Лайк на пост с розыгрышем  
-• Комментарий с отметкой двух друзей
-🎁 Вот твой персональный промокод: *{promo_code}*
-"""
+• Комментарий с отметкой двух друзей  
+🎁 Вот твой персональный промокод: *{promo_code}*"""
 FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
-1. Подписан ли ты на @aviashow.kz  
-2. Лайкнул ли пост  
+1. Подписан на @aviashow.kz  
+2. Лайкнул пост  
 3. Отметил 2 друзей  
 🔁 Когда всё будет готово — просто отправь свой ник снова."""
 ASK_PASS     = "Пожалуйста, отправьте пароль для скачивания файла."
@@ -58,10 +57,10 @@ SCOPE = [
 ]
 def init_sheet():
     if not CREDENTIALS_JSON:
-        raise ValueError("❌ НЕ задана переменная GOOGLE_CREDENTIALS")
+        raise ValueError("❌ Не задана переменная GOOGLE_CREDENTIALS")
     try:
         creds_dict = json.loads(CREDENTIALS_JSON)
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n","\n")
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
         client = gspread.authorize(creds)
         return client.open_by_key(SPREADSHEET_ID).sheet1
@@ -93,28 +92,35 @@ def has_user_commented(username):
     while url:
         resp = requests.get(url, params=params).json()
         for c in resp.get("data", []):
-            commenters.append(c.get("username","").lower())
+            commenters.append(c.get("username", "").lower())
         url = resp.get("paging", {}).get("next")
     logging.info(f"🛠 Debug — все найденные юзеры: {commenters}")
     return username.lower() in commenters
 
 # --- Хендлеры Telegram ---
 def register_handlers(app, sheet):
-    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    # /start
+    async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # сбросим флаги
+        context.user_data.clear()
+        await update.message.reply_text(START_MESSAGE)
+        await update.message.reply_text(ASK_USERNAME)
+
+    # /download
+    async def download_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data["awaiting_password"] = True
+        await update.message.reply_text(ASK_PASS)
+
+    # общий обработчик всех прочих сообщений
+    async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text.strip()
 
-        # 1) Если пользователь ещё не видел стартовых сообщений
-        if not context.user_data.get("started"):
-            context.user_data["started"] = True
-            await update.message.reply_text(START_MESSAGE)
-            await update.message.reply_text(ASK_USERNAME)
-            return
-
-        # 2) Если мы ждём пароль после /download
+        # 1) если ждём пароль
         if context.user_data.get("awaiting_password"):
             context.user_data["awaiting_password"] = False
             if text == DOWNLOAD_PASSWORD:
-                # скачиваем xlsx напрямую из Google Sheets
+                # скачиваем xlsx
                 url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
                 token = sheet.client.auth.access_token
                 r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
@@ -128,31 +134,29 @@ def register_handlers(app, sheet):
                 await update.message.reply_text(WRONG_PASS)
             return
 
-        # 3) Команда /download
-        if text.lower() == "/download":
-            context.user_data["awaiting_password"] = True
-            await update.message.reply_text(ASK_PASS)
+        # 2) если это команда (но не /start или /download) — игнорируем
+        if text.startswith("/"):
             return
 
-        # 4) Обработка никнейма
+        # 3) обработка никнейма
         username = text.lstrip("@").lower()
 
         free, given = load_promo_codes(sheet)
-        # Уже получал?
         if username in given:
-            await update.message.reply_text(f"👀 Вы уже получили промокод: {given[username]}")
+            await update.message.reply_text(
+                f"👀 Вы уже получили промокод: {given[username]}"
+            )
             return
 
-        # Проверяем комментарий в Instagram
         await update.message.reply_text(f"🔍 Проверяю комментарий от @{username}…")
         if not has_user_commented(username):
             await update.message.reply_text(FAIL_MESSAGE)
             return
 
-        # Выдаём свободный
         if not free:
             await update.message.reply_text("😔 Промокоды закончились.")
             return
+
         code, row = random.choice(free)
         mark_code_as_used(sheet, row, username)
         await update.message.reply_text(
@@ -160,7 +164,10 @@ def register_handlers(app, sheet):
             parse_mode="Markdown"
         )
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # регистрация
+    app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("download", download_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
 # --- Запуск ---
 def main():

@@ -35,6 +35,12 @@ SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выпо
 Спасибо за участие и удачи в розыгрыше! Итоги — 1 июня!
 """
 
+ALREADY_RECEIVED_MESSAGE_TEMPLATE = """✅ Вы уже получили промокод ранее:
+🎁 Ваш персональный промокод: *{promo_code}*
+
+💡 Используйте его на [ticketon.kz](https://ticketon.kz) при покупке стандартного билета.
+"""
+
 FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
 Проверь, пожалуйста:
 1. Подписан ли ты на @aviashow.kz  
@@ -134,7 +140,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         existing_code = find_existing_code(username)
         if existing_code:
             await update.message.reply_text(
-                SUCCESS_MESSAGE_TEMPLATE.format(promo_code=existing_code),
+                ALREADY_RECEIVED_MESSAGE_TEMPLATE.format(promo_code=existing_code),
                 parse_mode='Markdown'
             )
         else:

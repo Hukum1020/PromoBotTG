@@ -26,7 +26,7 @@ ACCESS_TOKEN       = os.getenv("ACCESS_TOKEN")         # Page Access Token
 MEDIA_ID           = os.getenv("MEDIA_ID")             # Instagram Business Account ID
 TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")       # Telegram Bot Token
 DOWNLOAD_PASSWORD  = os.getenv("DOWNLOAD_PASSWORD")    # Пароль для /download
-CREDENTIALS_JSON   = os.getenv("GOOGLE_CREDENTIALS_JSON")
+CREDENTIALS_JSON   = os.getenv("GOOGLE_CREDENTIALS")
 SPREADSHEET_ID     = os.getenv("SHEET_ID")             # ID Google Sheet
 
 # Сообщения

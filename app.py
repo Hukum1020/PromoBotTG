@@ -5,11 +5,11 @@ from openpyxl import load_workbook
 from telegram import Update, InputFile
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
 
-# Переменные из окружения
+# Переменные окружения
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 MEDIA_ID = os.getenv("MEDIA_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-DOWNLOAD_PASSWORD = os.getenv("DOWNLOAD_PASSWORD")  # Пароль для скачивания файла
+DOWNLOAD_PASSWORD = os.getenv("DOWNLOAD_PASSWORD")
 
 EXCEL_FILE = 'promo_codes_test.xlsx'
 SHEET_NAME = 'Лист1'
@@ -84,27 +84,22 @@ def has_user_commented(username):
         url = data.get('paging', {}).get('next')
     return False
 
-# Команды
-async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введите пароль:")
+# Команда /start
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(START_MESSAGE)
+    await update.message.reply_text(ASK_USERNAME)
+    context.user_data["started"] = True
 
-    response = await context.bot.wait_for_message(chat_id=update.effective_chat.id)
-    if response.text == PASSWORD:
-        if os.path.exists(EXCEL_FILE):
-            with open(EXCEL_FILE, 'rb') as file:
-                await update.message.reply_document(
-                    document=InputFile(file, filename="promo_codes.xlsx"),  # <-- Явно указываем имя!
-                    caption="Вот ваша таблица промокодов."
-                )
-        else:
-            await update.message.reply_text("Файл не найден.")
-    else:
-        await update.message.reply_text("Неверный пароль!")
+# Команда /download
+async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(ASK_PASSWORD_MESSAGE)
+    context.user_data['awaiting_password'] = True
 
-# Обработка всех текстовых сообщений
+# Обработка текстовых сообщений
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
+    # Если ожидаем ввод пароля
     if context.user_data.get('awaiting_password'):
         if text == DOWNLOAD_PASSWORD:
             if os.path.exists(EXCEL_FILE):
@@ -116,14 +111,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['awaiting_password'] = False
         return
 
-    # Если пользователь ещё не стартовал
+    # Работа с никнеймами
     if not context.user_data.get("started"):
-        await update.message.reply_text(START_MESSAGE)
-        await update.message.reply_text(ASK_USERNAME)
-        context.user_data["started"] = True
+        await start_command(update, context)
         return
 
-    # Проверка никнейма
     username = text.lstrip('@')
     await update.message.reply_text(f"Проверяю комментарий от @{username}…")
 
@@ -145,6 +137,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("download", download_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 

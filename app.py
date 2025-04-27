@@ -85,9 +85,21 @@ def has_user_commented(username):
     return False
 
 # Команды
-async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(ASK_PASSWORD_MESSAGE)
-    context.user_data['awaiting_password'] = True
+async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введите пароль:")
+
+    response = await context.bot.wait_for_message(chat_id=update.effective_chat.id)
+    if response.text == PASSWORD:
+        if os.path.exists(EXCEL_FILE):
+            with open(EXCEL_FILE, 'rb') as file:
+                await update.message.reply_document(
+                    document=InputFile(file, filename="promo_codes.xlsx"),  # <-- Явно указываем имя!
+                    caption="Вот ваша таблица промокодов."
+                )
+        else:
+            await update.message.reply_text("Файл не найден.")
+    else:
+        await update.message.reply_text("Неверный пароль!")
 
 # Обработка всех текстовых сообщений
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -1,150 +1,167 @@
-import os
 import random
 import requests
+import os
+import logging
 from openpyxl import load_workbook
 from telegram import Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
+    MessageHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
     filters,
 )
 
-# ─── ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ───────────────────────────────────────────────────────
-ACCESS_TOKEN      = os.getenv("ACCESS_TOKEN")       # Page Access Token для Instagram Business API
-MEDIA_ID          = os.getenv("MEDIA_ID")           # ID поста в Instagram
-TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")     # Токен вашего Telegram-бота
-DOWNLOAD_PASSWORD = os.getenv("DOWNLOAD_PASSWORD")  # Пароль для команды /download
+# --- Настройка логирования ---
+logging.basicConfig(
+    format='%(asctime)s %(levelname)s %(message)s',
+    level=logging.INFO
+)
 
-EXCEL_FILE = "promo_codes_test.xlsx"
-SHEET_NAME = "Лист1"
+# --- Переменные окружения ---
+ACCESS_TOKEN     = os.getenv("ACCESS_TOKEN")
+MEDIA_ID         = os.getenv("MEDIA_ID")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
+DOWNLOAD_PASSWORD= os.getenv("DOWNLOAD_PASSWORD")
 
-# ─── СООБЩЕНИЯ ─────────────────────────────────────────────────────────────────
-START_MESSAGE = """Привет! 👋  
-Отправь мне свой Instagram-никнейм (например, @yourname), я проверю комментарий под нашим постом и выдам промокод."""
-ASK_PASSWORD_MESSAGE   = "🔐 Введите пароль для скачивания файла:"
-WRONG_PASSWORD_MESSAGE = "🚫 Неверный пароль."
-FILE_NOT_FOUND_MESSAGE = "🚫 Файл не найден."
-ALREADY_GOT_MESSAGE    = "✅ Вы уже получили промокод: *{promo_code}*"
-SUCCESS_TEMPLATE       = """✅ Отлично! Комментарий обнаружен.
-Ваш промокод: *{promo_code}*
-Используйте его до {expiry}."""
-FAIL_MESSAGE           = """😕 Комментарий под постом не найден. Проверьте, пожалуйста:
-1. Подписка на @aviashow.kz
-2. Лайк на пост
-3. Комментарий с отметкой двух друзей"""
+EXCEL_FILE       = "promo_codes_test.xlsx"
+SHEET_NAME       = "Лист1"
 
-# ─── ФУНКЦИИ РАБОТЫ С EXCEL ────────────────────────────────────────────────────
-def find_user_in_sheet(username: str):
-    """Ищет в колонке D (4) никнейм. Возвращает (row, promo_code) или None."""
+# --- Сообщения ---
+START_MESSAGE = (
+    "Привет! 👋\n"
+    "Чтобы получить промокод, просто пришли свой Instagram-никнейм (например, @yourname).\n"
+)
+ALREADY_GOT       = "❗️ Вы уже получили промокод ранее."
+SUCCESS_TEMPLATE  = "✅ Ваш промокод: *{promo_code}*"
+FAIL_MESSAGE      = (
+    "😕 Комментарий под постом не найден. Проверь, пожалуйста, что ты:\n"
+    "1. Подписан на @aviashow.kz\n"
+    "2. Лайкнул пост\n"
+    "3. Оставил комментарий с отметкой 2 друзей"
+)
+ASK_DOWNLOAD_PASS = "Пожалуйста, отправьте пароль для скачивания файла."
+WRONG_PASS        = "🚫 Неверный пароль."
+FILE_NOT_FOUND    = "🚫 Файл не найден на сервере."
+
+# --- Помощники работы с Excel ---
+def load_promo_codes():
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        code, _, expiry, used = row[0], row[1], row[2], row[3]
-        if used and used.lower() == username.lower():
-            wb.close()
-            return (row, code)
-    wb.close()
-    return None
-
-def get_available_codes():
-    """Возвращает список (promo_code, row_number) для пустых Used."""
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb[SHEET_NAME]
-    out = []
+    free_codes = []
     for row in ws.iter_rows(min_row=2):
-        code_cell = row[0]
-        used_cell = row[3]
-        if code_cell.value and (used_cell.value is None or used_cell.value == ""):
-            out.append((code_cell.value, code_cell.row, ws.cell(row=code_cell.row, column=3).value))
+        code = row[0].value
+        used = row[3].value  # колонка D (Used)
+        if code and not used:
+            free_codes.append((code, row[0].row))
     wb.close()
-    return out
+    return free_codes
 
-def mark_code_as_used(row: int, username: str):
-    """Записывает username в колонку D на строке row."""
+def mark_code_as_used(row_number: int, username: str):
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
-    ws.cell(row=row, column=4, value=username)
+    ws.cell(row=row_number, column=4, value=username)  # пишем в D
     wb.save(EXCEL_FILE)
     wb.close()
 
-# ─── ФУНКЦИЯ ПРОВЕРКИ КОММЕНТАРИЯ В INSTAGRAM ──────────────────────────────────
-def has_user_commented(username: str) -> bool:
-    url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
-    params = {
-        "access_token": ACCESS_TOKEN,
-        "fields": "owner.username,text",
-        "limit": 100,
-    }
-    while url:
-        resp = requests.get(url, params=params).json()
-        for c in resp.get("data", []):
-            owner = c.get("owner", {})
-            if owner.get("username", "").lower() == username.lower():
-                return True
-        url = resp.get("paging", {}).get("next")
+def is_user_in_table(username: str) -> bool:
+    wb = load_workbook(EXCEL_FILE, read_only=True)
+    ws = wb[SHEET_NAME]
+    for row in ws.iter_rows(min_row=2):
+        if row[3].value and row[3].value.lower() == username.lower():
+            wb.close()
+            return True
+    wb.close()
     return False
 
-# ─── ХАНДЛЕРЫ ТЕЛЕГРАМ ────────────────────────────────────────────────────────
-async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает /download — спрашивает пароль."""
-    context.user_data["await_download"] = True
-    await update.message.reply_text(ASK_PASSWORD_MESSAGE)
+# --- Проверка комментариев в Instagram ---
+def has_user_commented(username: str) -> bool:
+    """
+    Дополнительно логируем всех найденных в посте комментаторов для дебага.
+    """
+    url = f"https://graph.facebook.com/v22.0/{MEDIA_ID}/comments"
+    params = {
+        "access_token": ACCESS_TOKEN,
+        "fields": "username,text",
+        "limit": 100,
+    }
+    all_usernames = []
+    while url:
+        resp = requests.get(url, params=params)
+        data = resp.json()
+        # Собираем всех имён
+        for c in data.get("data", []):
+            u = c.get("username", "")
+            all_usernames.append(u)
+        url = data.get("paging", {}).get("next")
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    user = update.effective_user.id
+    logging.info(f"🛠 Debug — все найденные юзеры в комментариях: {all_usernames}")
 
-    # — если ждём пароль для скачивания
-    if context.user_data.get("await_download"):
-        context.user_data["await_download"] = False
-        if text == DOWNLOAD_PASSWORD:
-            if os.path.exists(EXCEL_FILE):
-                await update.message.reply_document(InputFile(EXCEL_FILE, filename="promo_codes.xlsx"))
-            else:
-                await update.message.reply_text(FILE_NOT_FOUND_MESSAGE)
-        else:
-            await update.message.reply_text(WRONG_PASSWORD_MESSAGE)
+    # проверяем, есть ли наш ник среди них
+    return username.lower() in [u.lower() for u in all_usernames]
+
+# --- Обработчики Telegram ---
+async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip().lstrip("@")
+    logging.info(f"Проверяю комментарий от @{username}…")
+    # 1. уже получал?
+    if is_user_in_table(username):
+        await update.message.reply_text(ALREADY_GOT)
         return
 
-    # — иначе считаем, что это Instagram-никнейм
-    username = text.lstrip("@")
-    await update.message.reply_text(f"🔍 Проверяю комментарий от @{username}…")
-
-    # 1) проверим, не получал ли уже пользователь код
-    found = find_user_in_sheet(username)
-    if found:
-        _, promo_code = found
-        await update.message.reply_text(ALREADY_GOT_MESSAGE.format(promo_code=promo_code), parse_mode="Markdown")
-        return
-
-    # 2) проверяем комментарий в Instagram
+    # 2. есть ли коммент?
     if not has_user_commented(username):
         await update.message.reply_text(FAIL_MESSAGE)
         return
 
-    # 3) выдаём новый код
-    available = get_available_codes()
-    if not available:
+    # 3. выдаём случайный код
+    free_codes = load_promo_codes()
+    if not free_codes:
         await update.message.reply_text("😔 Промокоды закончились.")
         return
 
-    promo_code, row, expiry = random.choice(available)
+    promo, row = random.choice(free_codes)
     mark_code_as_used(row, username)
     await update.message.reply_text(
-        SUCCESS_TEMPLATE.format(promo_code=promo_code, expiry=expiry),
+        SUCCESS_TEMPLATE.format(promo_code=promo),
         parse_mode="Markdown"
     )
 
-# ─── СТАРТ БОТА ───────────────────────────────────────────────────────────────
+async def download_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(ASK_DOWNLOAD_PASS)
+    context.user_data["awaiting_pass"] = True
+
+async def download_check_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_pass"):
+        return  # игнорируем, если мы не ждали пароль
+
+    context.user_data["awaiting_pass"] = False
+    pw = update.message.text.strip()
+    if pw != DOWNLOAD_PASSWORD:
+        await update.message.reply_text(WRONG_PASS)
+        return
+
+    if not os.path.exists(EXCEL_FILE):
+        await update.message.reply_text(FILE_NOT_FOUND)
+        return
+
+    # Отправляем файл .xlsx
+    await update.message.reply_document(InputFile(EXCEL_FILE), filename="promo_codes.xlsx")
+
+# --- Точка входа ---
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # команда /download
-    app.add_handler(CommandHandler("download", download_command))
-    # всё остальное — текстовые сообщения
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    # /download
+    app.add_handler(CommandHandler("download", download_start))
+    # проверяем пароль
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(fr"^{DOWNLOAD_PASSWORD}$"),
+        download_check_pass
+    ))
+
+    # все остальные текстовые сообщения — это инста-ник
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
 
     app.run_polling()
 

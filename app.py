@@ -10,7 +10,7 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 MEDIA_ID = os.getenv("MEDIA_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-EXCEL_FILE = 'promo_codes.xlsx'  # Название файла
+EXCEL_FILE = 'promo_codes_test.xlsx'  # Название файла
 SHEET_NAME = 'Лист1'  # Название листа
 
 # Сообщения

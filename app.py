@@ -17,7 +17,8 @@ from telegram.ext import (
 # Настройка логирования
 def setup_logging():
     logging.basicConfig(
-        format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO
+        format="%(asctime)s %(levelname)s %(message)s",
+        level=logging.INFO
     )
 
 # Переменные окружения
@@ -71,10 +72,13 @@ SCOPE = [
 ]
 
 def init_sheet():
+    if not CREDENTIALS_JSON:
+        raise ValueError("❌ Переменная окружения GOOGLE_CREDENTIALS_JSON не установлена.")
     try:
         creds_dict = json.loads(CREDENTIALS_JSON)
-        # Восстанавливаем корректные переносы строк в ключе
-        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n").strip()
+        # Исправляем экранированные переносы строк в private_key
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n").strip()
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
@@ -159,7 +163,6 @@ def register_handlers(app, sheet):
         free, given = load_promo_codes(sheet)
         if username in given:
             await update.message.reply_text(
-                WINNER_MESSAGE if False else
                 SUCCESS_MESSAGE_TEMPLATE.format(promo_code=given[username]),
                 parse_mode="Markdown"
             )

@@ -16,39 +16,24 @@ SHEET_NAME = 'Лист1'
 
 # Сообщения
 START_MESSAGE = """Привет! 👋  
-Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🎁 Каждый участник получает ПОДАРОК — промокод на скидку 10% на стандартный билет!
+Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🏱 Каждый участник получает ПОДАРОК — промокод на скидку 10% на стандартный билет!
 Перед тем как выдать тебе промокод, давай проверим, что ты выполнил все условия 👇"""
 
 ASK_USERNAME = "Пожалуйста, отправь свой Instagram-никнейм (например, @yourname)"
 
-SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены:
-• Подписка на @aviashow.kz  
-• Лайк на пост с розыгрышем  
-• Комментарий с отметкой двух друзей
-🎁 Вот твой персональный промокод: *{promo_code}*
+SUCCESS_MESSAGE_TEMPLATE = """\
+✅ Отлично, все условия выполнены:\n• Подписка на @aviashow.kz\n• Лайк на пост с розыгрышем\n• Комментарий с отметкой двух друзей\n
+🏱 Вот твой персональный промокод: *{promo_code}*\n\nИспользуй его на [ticketon.kz](https://ticketon.kz) и получи скидку!\n"""
 
-💡 Используй его на [ticketon.kz](https://ticketon.kz) при покупке стандартного билета и получи скидку:
-- до 31 мая — 3000 ₸  
-- с 1 июня по 31 июля — 4000 ₸  
-- с 1 по 17 августа — 5000 ₸
-
-Спасибо за участие и удачи в розыгрыше! Итоги — 1 июня!
-"""
-
-FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
-Проверь, пожалуйста:
-1. Подписан ли ты на @aviashow.kz  
-2. Лайкнул ли пост с розыгрышем  
-3. Отметил 2 друзей в комментарии под постом
-
-🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!
-"""
+FAIL_MESSAGE = """\
+😕 Ты ещё не выполнил все условия.\n🔄 Когда все будет готово, просто отправь свой ник ещё раз!"""
 
 ASK_PASSWORD_MESSAGE = "Пожалуйста, отправь пароль для скачивания файла."
-WRONG_PASSWORD_MESSAGE = "🚫 Неверный пароль. Попробуйте снова."
-FILE_NOT_FOUND_MESSAGE = "🚫 Файл не найден."
+WRONG_PASSWORD_MESSAGE = "🛑 Неверный пароль. Попробуйте снова."
+FILE_NOT_FOUND_MESSAGE = "🛑 Файл не найден."
 
-# Загружаем коды
+# Загрузка и пометка промокодов
+
 def load_promo_codes():
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
@@ -60,7 +45,6 @@ def load_promo_codes():
     wb.close()
     return codes
 
-# Отмечаем код как использованный
 def mark_code_as_used(row_number, username):
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
@@ -68,7 +52,8 @@ def mark_code_as_used(row_number, username):
     wb.save(EXCEL_FILE)
     wb.close()
 
-# Проверка комментария в Instagram
+# Проверка комментариев
+
 def has_user_commented(username):
     url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
     params = {
@@ -85,7 +70,8 @@ def has_user_commented(username):
         url = data.get('paging', {}).get('next')
     return False
 
-# Обработка обычных сообщений
+# Бот
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("started"):
         await update.message.reply_text(START_MESSAGE)
@@ -94,7 +80,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = update.message.text.strip().lstrip('@')
-    await update.message.reply_text(f"Проверяю комментарий от @{username}…")
+    await update.message.reply_text(f"🔍 Проверяю @{username}...")
 
     if has_user_commented(username):
         promo_codes = load_promo_codes()
@@ -106,11 +92,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text("😔 Промокоды закончились.")
+            await update.message.reply_text("😞 Промокоды закончились.")
     else:
         await update.message.reply_text(FAIL_MESSAGE)
 
-# Обработка команды /download
 async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(ASK_PASSWORD_MESSAGE)
     context.user_data['awaiting_password'] = True
@@ -120,14 +105,16 @@ async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         password = update.message.text.strip()
         if password == DOWNLOAD_PASSWORD:
             if os.path.exists(EXCEL_FILE):
-                await update.message.reply_document(InputFile(EXCEL_FILE))
+                with open(EXCEL_FILE, 'rb') as file:
+                    await update.message.reply_document(InputFile(file, filename="promo_codes.xlsx"))
             else:
                 await update.message.reply_text(FILE_NOT_FOUND_MESSAGE)
         else:
             await update.message.reply_text(WRONG_PASSWORD_MESSAGE)
         context.user_data['awaiting_password'] = False
 
-# Запуск бота
+# Запуск
+
 def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 

@@ -1,8 +1,8 @@
 import os
 import random
 import json
-import requests
 import logging
+import requests
 from oauth2client.service_account import ServiceAccountCredentials
 import gspread
 from telegram import Update, InputFile
@@ -25,8 +25,8 @@ ACCESS_TOKEN       = os.getenv("ACCESS_TOKEN")         # Page Access Token
 MEDIA_ID           = os.getenv("MEDIA_ID")             # Instagram Business Account ID
 TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")       # Telegram Bot Token
 DOWNLOAD_PASSWORD  = os.getenv("DOWNLOAD_PASSWORD")    # Пароль для /download
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS_JSON")
-SHEET_ID           = os.getenv("SHEET_ID")             # ID Google Sheet
+CREDENTIALS_JSON   = os.getenv("GOOGLE_CREDENTIALS_JSON")
+SPREADSHEET_ID     = os.getenv("SHEET_ID")             # ID Google Sheet
 
 # Сообщения
 START_MESSAGE = """Привет! 👋  
@@ -51,7 +51,7 @@ SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выпо
 FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
 Проверь, пожалуйста:
 1. Подписан ли ты на @aviashow.kz  
-2. Лайкнул ли пост с розыгрышем  
+2. Лайк на пост с розыгрышем  
 3. Отметил 2 друзей в комментарии под постом
 
 🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!"""
@@ -64,19 +64,25 @@ ASK_PASS     = "Пожалуйста, отправьте пароль для с�
 WRONG_PASS   = "🚫 Неверный пароль. Попробуйте снова."
 FILE_MISSING = "🚫 Файл не найден."
 
-# Инициализация Google Sheets
-def init_sheet():
-    creds_dict = json.loads(GOOGLE_CREDENTIALS)
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).sheet1
-    return sheet
+# Инициализация Google Sheets с обработкой CREDENTIALS_JSON
+SCOPE = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
 
-# Загрузка промокодов и уже выданных
+def init_sheet():
+    try:
+        creds_dict = json.loads(CREDENTIALS_JSON)
+        # Восстанавливаем корректные переносы строк в ключе
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n").strip()
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+        return sheet
+    except Exception as e:
+        raise ValueError(f"❌ Ошибка подключения к Google Sheets: {e}")
+
+# Загрузка и обновление промокодов
 
 def load_promo_codes(sheet):
     all_values = sheet.get_all_values()
@@ -91,7 +97,6 @@ def load_promo_codes(sheet):
             free.append((code, idx))
     return free, given
 
-# Запись использованного кода
 def mark_code_as_used(sheet, row_idx, username):
     sheet.update_cell(row_idx, 4, username)
 
@@ -114,6 +119,7 @@ def has_user_commented(username):
     return username.lower() in commenters
 
 # Обработчики Telegram
+
 def register_handlers(app, sheet):
     async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text.strip()
@@ -121,9 +127,9 @@ def register_handlers(app, sheet):
         if context.user_data.get("awaiting_password"):
             context.user_data["awaiting_password"] = False
             if text == DOWNLOAD_PASSWORD:
-                # отправка итогового .xlsx
+                # экспорт Google Sheet в xlsx
                 download_url = (
-                    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+                    f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
                 )
                 token = sheet.client.auth.access_token
                 headers = {"Authorization": f"Bearer {token}"}
@@ -145,12 +151,11 @@ def register_handlers(app, sheet):
             await update.message.reply_text(ASK_PASS)
             return
 
-        # Обработка ника
+        # Обработка никнейма
         username = text.lstrip("@").lower()
         await update.message.reply_text(START_MESSAGE)
         await update.message.reply_text(ASK_USERNAME)
 
-        # Проверяем уже получал
         free, given = load_promo_codes(sheet)
         if username in given:
             await update.message.reply_text(
@@ -160,13 +165,11 @@ def register_handlers(app, sheet):
             )
             return
 
-        # Проверяем комментарий в Instagram
         await update.message.reply_text(f"🔍 Проверяю комментарий от @{username}…")
         if not has_user_commented(username):
             await update.message.reply_text(FAIL_MESSAGE)
             return
 
-        # Выдаём новый код
         if not free:
             await update.message.reply_text("😔 Промокоды закончились.")
             return
@@ -179,7 +182,8 @@ def register_handlers(app, sheet):
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Запуск приложения
+# Запуск бота
+
 def main():
     setup_logging()
     sheet = init_sheet()

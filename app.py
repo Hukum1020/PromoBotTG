@@ -1,152 +1,191 @@
 import os
 import random
+import json
 import requests
-
-import gspread
+import logging
 from oauth2client.service_account import ServiceAccountCredentials
-
+import gspread
 from telegram import Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
-    MessageHandler,
     CommandHandler,
+    MessageHandler,
     ContextTypes,
     filters,
 )
 
-# ==== Переменные окружения ====
-ACCESS_TOKEN       = os.getenv("ACCESS_TOKEN")
-MEDIA_ID           = os.getenv("MEDIA_ID")
-TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
-DOWNLOAD_PASSWORD  = os.getenv("DOWNLOAD_PASSWORD")
+# Настройка логирования
+def setup_logging():
+    logging.basicConfig(
+        format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO
+    )
+
+# Переменные окружения
+ACCESS_TOKEN       = os.getenv("ACCESS_TOKEN")         # Page Access Token
+MEDIA_ID           = os.getenv("MEDIA_ID")             # Instagram Business Account ID
+TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")       # Telegram Bot Token
+DOWNLOAD_PASSWORD  = os.getenv("DOWNLOAD_PASSWORD")    # Пароль для /download
 GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS_JSON")
-SHEET_ID           = os.getenv("SHEET_ID")  # ID вашей Google Sheet
+SHEET_ID           = os.getenv("SHEET_ID")             # ID Google Sheet
 
-# ==== Подключение к Google Sheets ====
-scope = ["https://spreadsheets.google.com/feeds",
-         "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    data = json.loads(GOOGLE_CREDENTIALS),
-    scopes = scope
-)
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_ID)
-ws = sh.sheet1  # либо .worksheet("Лист1") если у вас другой лист
-
-# ==== Сообщения ====
+# Сообщения
 START_MESSAGE = """Привет! 👋  
-Ты на шаг ближе к участию…"""
-ASK_USERNAME = "Пожалуйста, отправь свой Instagram-никнейм (например, @yourname)"
-SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены: … *{promo_code}* …"""
-FAIL_MESSAGE   = """😕 Ты не выполнил все условия…"""
-ALREADY_GOT    = "⚠️ Вы уже получили промокод ранее."
-ASK_PASSWORD  = "Пожалуйста, отправь пароль для скачивания файла."
-WRONG_PASS    = "🚫 Неверный пароль."
-FILE_NOT_FOUND= "🚫 Не удалось получить файл."
+Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🎁 Каждый участник получает ПОДАРОК — промокод на скидку 10% на стандартный билет!
+Перед тем как выдать тебе промокод, давай проверим, что ты выполнил все условия 👇"""
 
-# ==== Вспомогательные функции для гугл-таблицы ====
-def load_promo_codes():
-    """
-    Возвращает список свободных кодов [(code, row_index), ...]
-    и словарь уже выданных {username: row_index, ...}
-    """
-    data = ws.get_all_values()
+ASK_USERNAME = "Пожалуйста, отправь свой Instagram-никнейм (например, @yourname)"
+
+SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены:
+• Подписка на @aviashow.kz  
+• Лайк на пост с розыгрышем  
+• Комментарий с отметкой двух друзей
+🎁 Вот твой персональный промокод: *{promo_code}*
+
+💡 Используй его на [ticketon.kz](https://ticketon.kz) при покупке стандартного билета и получи скидку:
+- до 31 мая — 3000 ₸  
+- с 1 июня по 31 июля — 4000 ₸  
+- с 1 по 17 августа — 5000 ₸
+
+Спасибо за участие и удачи в розыгрыше! Итоги — 1 июня!"""
+
+FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
+Проверь, пожалуйста:
+1. Подписан ли ты на @aviashow.kz  
+2. Лайкнул ли пост с розыгрышем  
+3. Отметил 2 друзей в комментарии под постом
+
+🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!"""
+
+WINNER_MESSAGE = """🎉 Поздравляем! Ты выиграл VIP-билет на авиашоу «Небо Байсерке – 2025»!
+Наш менеджер скоро свяжется с тобой, чтобы выслать билет.  
+Следи за новостями в сторис и до встречи 17 августа на аэродроме Байсерке!"""
+
+ASK_PASS     = "Пожалуйста, отправьте пароль для скачивания файла."
+WRONG_PASS   = "🚫 Неверный пароль. Попробуйте снова."
+FILE_MISSING = "🚫 Файл не найден."
+
+# Инициализация Google Sheets
+def init_sheet():
+    creds_dict = json.loads(GOOGLE_CREDENTIALS)
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key(SHEET_ID).sheet1
+    return sheet
+
+# Загрузка промокодов и уже выданных
+
+def load_promo_codes(sheet):
+    all_values = sheet.get_all_values()
     free = []
     given = {}
-    # предположим, заголовок в строке 0, данные с 1
-    for i, row in enumerate(data[1:], start=2):
+    for idx, row in enumerate(all_values[1:], start=2):
         code = row[0].strip()
         used = row[3].strip() if len(row) > 3 else ""
         if used:
-            given[used.lower()] = i
+            given[used.lower()] = code
         else:
-            free.append((code, i))
+            free.append((code, idx))
     return free, given
 
-def mark_code_as_used(row_index: int, username: str):
-    ws.update_cell(row_index, 4, username)  # column D = 4
+# Запись использованного кода
+def mark_code_as_used(sheet, row_idx, username):
+    sheet.update_cell(row_idx, 4, username)
 
-# ==== Проверка комментария в Instagram ====
-def has_user_commented(username: str) -> bool:
-    url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
+# Проверка комментариев в Instagram
+
+def has_user_commented(username):
+    url = f"https://graph.facebook.com/v22.0/{MEDIA_ID}/comments"
     params = {
         "access_token": ACCESS_TOKEN,
         "fields": "username,text",
         "limit": 100,
     }
+    commenters = []
     while url:
         resp = requests.get(url, params=params).json()
         for c in resp.get("data", []):
-            if c["username"].lower() == username.lower():
-                return True
+            commenters.append(c.get("username", "").lower())
         url = resp.get("paging", {}).get("next")
-    return False
+    logging.info(f"🛠 Debug — все найденные юзеры: {commenters}")
+    return username.lower() in commenters
 
-# ==== Хендлеры Telegram ====
-async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.message.text.strip().lstrip("@").lower()
-    await update.message.reply_text(f"🔎 Проверяю @{username}…")
+# Обработчики Telegram
+def register_handlers(app, sheet):
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        text = update.message.text.strip()
+        # Парольный режим
+        if context.user_data.get("awaiting_password"):
+            context.user_data["awaiting_password"] = False
+            if text == DOWNLOAD_PASSWORD:
+                # отправка итогового .xlsx
+                download_url = (
+                    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+                )
+                token = sheet.client.auth.access_token
+                headers = {"Authorization": f"Bearer {token}"}
+                r = requests.get(download_url, headers=headers)
+                if r.status_code == 200:
+                    await update.message.reply_document(
+                        document=r.content,
+                        filename="promo_codes.xlsx"
+                    )
+                else:
+                    await update.message.reply_text(FILE_MISSING)
+            else:
+                await update.message.reply_text(WRONG_PASS)
+            return
 
-    # 1) проверяем Instagram-комментарий
-    if not has_user_commented(username):
-        return await update.message.reply_text(FAIL_MESSAGE)
+        # Команда /download
+        if text.lower() == "/download":
+            context.user_data["awaiting_password"] = True
+            await update.message.reply_text(ASK_PASS)
+            return
 
-    # 2) загружаем список свободных и уже выданных
-    free, given = load_promo_codes()
+        # Обработка ника
+        username = text.lstrip("@").lower()
+        await update.message.reply_text(START_MESSAGE)
+        await update.message.reply_text(ASK_USERNAME)
 
-    # 3) если пользователь уже есть в given — шлём ALREADY_GOT
-    if username in given:
-        return await update.message.reply_text(ALREADY_GOT)
+        # Проверяем уже получал
+        free, given = load_promo_codes(sheet)
+        if username in given:
+            await update.message.reply_text(
+                WINNER_MESSAGE if False else
+                SUCCESS_MESSAGE_TEMPLATE.format(promo_code=given[username]),
+                parse_mode="Markdown"
+            )
+            return
 
-    # 4) иначе — выдаём случайный код и помечаем его
-    if not free:
-        return await update.message.reply_text("😔 Промокоды закончились.")
-    code, row = random.choice(free)
-    mark_code_as_used(row, username)
-    return await update.message.reply_text(
-        SUCCESS_MESSAGE_TEMPLATE.format(promo_code=code),
-        parse_mode="Markdown"
-    )
+        # Проверяем комментарий в Instagram
+        await update.message.reply_text(f"🔍 Проверяю комментарий от @{username}…")
+        if not has_user_commented(username):
+            await update.message.reply_text(FAIL_MESSAGE)
+            return
 
-async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(ASK_PASSWORD)
-    context.user_data["awaiting_password"] = True
-
-async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("awaiting_password"):
-        return  # не ждём пароль — пропускаем
-    pwd = update.message.text.strip()
-    context.user_data["awaiting_password"] = False
-
-    if pwd != DOWNLOAD_PASSWORD:
-        return await update.message.reply_text(WRONG_PASS)
-
-    # экспортируем текущую таблицу в Excel и отсылаем
-    # используем встроенный метод gspread + экспорт Google Drive API
-    download_url = (
-      f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export"
-      "?format=xlsx"
-    )
-    headers = {"Authorization": f"Bearer {creds.get_access_token().access_token}"}
-    resp = requests.get(download_url, headers=headers)
-    if resp.status_code == 200:
-        # отправляем как документ .xlsx
-        return await update.message.reply_document(
-            document=resp.content,
-            filename="promo_codes.xlsx",
-            parse_mode=None
+        # Выдаём новый код
+        if not free:
+            await update.message.reply_text("😔 Промокоды закончились.")
+            return
+        code, row = random.choice(free)
+        mark_code_as_used(sheet, row, username)
+        await update.message.reply_text(
+            SUCCESS_MESSAGE_TEMPLATE.format(promo_code=code),
+            parse_mode="Markdown"
         )
-    else:
-        return await update.message.reply_text(FILE_NOT_FOUND)
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# Запуск приложения
 def main():
+    setup_logging()
+    sheet = init_sheet()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("download", download_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_password))
-    # Обработка любого текста после пароля: выдача промокода
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
+    register_handlers(app, sheet)
     app.run_polling()
 
 if __name__ == "__main__":
-    import json
     main()

@@ -1,3 +1,5 @@
 python-telegram-bot==20.7
 requests
 openpyxl
+gspread
+oauth2client

@@ -1,180 +1,152 @@
 import os
 import random
-import logging
 import requests
-from openpyxl import load_workbook
+
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
 from telegram import Update, InputFile
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
     MessageHandler,
+    CommandHandler,
     ContextTypes,
     filters,
 )
 
-# Настроим логирование
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s", level=logging.INFO
+# ==== Переменные окружения ====
+ACCESS_TOKEN       = os.getenv("ACCESS_TOKEN")
+MEDIA_ID           = os.getenv("MEDIA_ID")
+TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
+DOWNLOAD_PASSWORD  = os.getenv("DOWNLOAD_PASSWORD")
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS_JSON")
+SHEET_ID           = os.getenv("SHEET_ID")  # ID вашей Google Sheet
+
+# ==== Подключение к Google Sheets ====
+scope = ["https://spreadsheets.google.com/feeds",
+         "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(
+    data = json.loads(GOOGLE_CREDENTIALS),
+    scopes = scope
 )
-logger = logging.getLogger(__name__)
+gc = gspread.authorize(creds)
+sh = gc.open_by_key(SHEET_ID)
+ws = sh.sheet1  # либо .worksheet("Лист1") если у вас другой лист
 
-# Переменные из окружения
-ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
-MEDIA_ID = os.getenv("MEDIA_ID")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-DOWNLOAD_PASSWORD = os.getenv("DOWNLOAD_PASSWORD")
-
-EXCEL_FILE = "promo_codes_test.xlsx"
-SHEET_NAME = "Лист1"
-
-# Тексты сообщений
+# ==== Сообщения ====
 START_MESSAGE = """Привет! 👋  
-Ты на шаг ближе к участию в розыгрыше VIP-билетов на авиашоу «Небо Байсерке – 2025» ✈🎁 Каждый участник получает ПОДАРОК — промокод на скидку 10% на стандартный билет!
-Перед тем как выдать тебе промокод, давай проверим, что ты выполнил все условия 👇
-"""
-
+Ты на шаг ближе к участию…"""
 ASK_USERNAME = "Пожалуйста, отправь свой Instagram-никнейм (например, @yourname)"
+SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены: … *{promo_code}* …"""
+FAIL_MESSAGE   = """😕 Ты не выполнил все условия…"""
+ALREADY_GOT    = "⚠️ Вы уже получили промокод ранее."
+ASK_PASSWORD  = "Пожалуйста, отправь пароль для скачивания файла."
+WRONG_PASS    = "🚫 Неверный пароль."
+FILE_NOT_FOUND= "🚫 Не удалось получить файл."
 
-SUCCESS_MESSAGE_TEMPLATE = """✅ Отлично, все условия выполнены:
-• Подписка на @aviashow.kz  
-• Лайк на пост с розыгрышем  
-• Комментарий с отметкой двух друзей
-🎁 Вот твой персональный промокод: *{promo_code}*
-💡 Используй его на [ticketon.kz](https://ticketon.kz) при покупке стандартного билета и получи скидку:
-- до 31 мая — 3000 ₸  
-- с 1 июня по 31 июля — 4000 ₸  
-- с 1 по 17 августа — 5000 ₸
-Спасибо за участие и удачи в розыгрыше! Итоги — 1 июня!
-"""
-
-FAIL_MESSAGE = """😕 Ты не выполнил все условия.  
-Проверь, пожалуйста:
-1. Подписан ли ты на @aviashow.kz  
-2. Лайкнул ли пост с розыгрышем  
-3. Отметил 2 друзей в комментарии под постом
-🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!
-"""
-
-WINNER_MESSAGE = """🎉 Поздравляем! Ты выиграл VIP-билет на авиашоу «Небо Байсерке – 2025»!
-Наш менеджер скоро свяжется с тобой, чтобы выслать билет.  
-Следи за новостями в сторис и до встречи 17 августа на аэродроме Байсерке!
-"""
-
-ASK_PASSWORD_MESSAGE = "Пожалуйста, отправь пароль для скачивания файла."
-WRONG_PASSWORD_MESSAGE = "🚫 Неверный пароль. Попробуйте снова."
-FILE_NOT_FOUND_MESSAGE = "🚫 Файл не найден."
-
-# --- Работа с таблицей промокодов ---
-
+# ==== Вспомогательные функции для гугл-таблицы ====
 def load_promo_codes():
-    """Возвращает список (код, номер строки) свободных промокодов."""
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb[SHEET_NAME]
+    """
+    Возвращает список свободных кодов [(code, row_index), ...]
+    и словарь уже выданных {username: row_index, ...}
+    """
+    data = ws.get_all_values()
     free = []
-    for row in ws.iter_rows(min_row=2, values_only=False):
-        code_cell, used_cell = row[0], row[3]
-        if code_cell.value and not used_cell.value:
-            free.append((code_cell.value, code_cell.row))
-    wb.close()
-    return free
+    given = {}
+    # предположим, заголовок в строке 0, данные с 1
+    for i, row in enumerate(data[1:], start=2):
+        code = row[0].strip()
+        used = row[3].strip() if len(row) > 3 else ""
+        if used:
+            given[used.lower()] = i
+        else:
+            free.append((code, i))
+    return free, given
 
-def find_user_row(username: str):
-    """
-    Ищет, есть ли уже username в колонке USED.
-    Если да — возвращает True.
-    """
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb[SHEET_NAME]
-    for row in ws.iter_rows(min_row=2, values_only=False):
-        used_cell = row[3]
-        if used_cell.value and used_cell.value.lower() == username.lower():
-            wb.close()
-            return True
-    wb.close()
-    return False
+def mark_code_as_used(row_index: int, username: str):
+    ws.update_cell(row_index, 4, username)  # column D = 4
 
-def mark_code_as_used(row_number: int, username: str):
-    """Помечает строку row_number записью username."""
-    wb = load_workbook(EXCEL_FILE)
-    ws = wb[SHEET_NAME]
-    ws.cell(row=row_number, column=4, value=username)
-    wb.save(EXCEL_FILE)
-    wb.close()
-
-# --- Проверка комментариев в Instagram ---
-
-def fetch_comments():
+# ==== Проверка комментария в Instagram ====
+def has_user_commented(username: str) -> bool:
     url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
     params = {
         "access_token": ACCESS_TOKEN,
         "fields": "username,text",
         "limit": 100,
     }
-    all_users = []
     while url:
-        resp = requests.get(url, params=params)
-        data = resp.json()
-        for c in data.get("data", []):
-            all_users.append(c["username"].lower())
-        url = data.get("paging", {}).get("next")
-    logger.info(f"🛠 Debug — все найденные юзеры в комментариях: {all_users}")
-    return all_users
+        resp = requests.get(url, params=params).json()
+        for c in resp.get("data", []):
+            if c["username"].lower() == username.lower():
+                return True
+        url = resp.get("paging", {}).get("next")
+    return False
 
-# --- Хендлеры Telegram ---
+# ==== Хендлеры Telegram ====
+async def handle_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip().lstrip("@").lower()
+    await update.message.reply_text(f"🔎 Проверяю @{username}…")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    # проверка на режим скачивания
-    if context.user_data.get("awaiting_password"):
-        context.user_data["awaiting_password"] = False
-        if text == DOWNLOAD_PASSWORD:
-            if os.path.exists(EXCEL_FILE):
-                await update.message.reply_document(InputFile(EXCEL_FILE, filename="promo_codes.xlsx"))
-            else:
-                await update.message.reply_text(FILE_NOT_FOUND_MESSAGE)
-        else:
-            await update.message.reply_text(WRONG_PASSWORD_MESSAGE)
-        return
+    # 1) проверяем Instagram-комментарий
+    if not has_user_commented(username):
+        return await update.message.reply_text(FAIL_MESSAGE)
 
-    # если команда /download
-    if text.lower() == "/download":
-        context.user_data["awaiting_password"] = True
-        await update.message.reply_text(ASK_PASSWORD_MESSAGE)
-        return
+    # 2) загружаем список свободных и уже выданных
+    free, given = load_promo_codes()
 
-    # иначе — это никнейм для выдачи промокода
-    username = text.lstrip("@").lower()
-    await update.message.reply_text(f"🔍 Проверяю комментарий от @{username}…")
-    commenters = fetch_comments()
+    # 3) если пользователь уже есть в given — шлём ALREADY_GOT
+    if username in given:
+        return await update.message.reply_text(ALREADY_GOT)
 
-    if username not in commenters:
-        await update.message.reply_text(FAIL_MESSAGE)
-        return
-
-    # уже получал?
-    if find_user_row(username):
-        await update.message.reply_text("ℹ️ Вы уже получили промокод.")
-        return
-
-    # раздаем новый
-    free_codes = load_promo_codes()
-    if not free_codes:
-        await update.message.reply_text("😔 Промокоды закончились.")
-        return
-
-    code, row = random.choice(free_codes)
+    # 4) иначе — выдаём случайный код и помечаем его
+    if not free:
+        return await update.message.reply_text("😔 Промокоды закончились.")
+    code, row = random.choice(free)
     mark_code_as_used(row, username)
-    await update.message.reply_text(
+    return await update.message.reply_text(
         SUCCESS_MESSAGE_TEMPLATE.format(promo_code=code),
-        parse_mode="Markdown",
+        parse_mode="Markdown"
     )
 
-# --- Запуск бота ---
+async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(ASK_PASSWORD)
+    context.user_data["awaiting_password"] = True
+
+async def check_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_password"):
+        return  # не ждём пароль — пропускаем
+    pwd = update.message.text.strip()
+    context.user_data["awaiting_password"] = False
+
+    if pwd != DOWNLOAD_PASSWORD:
+        return await update.message.reply_text(WRONG_PASS)
+
+    # экспортируем текущую таблицу в Excel и отсылаем
+    # используем встроенный метод gspread + экспорт Google Drive API
+    download_url = (
+      f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export"
+      "?format=xlsx"
+    )
+    headers = {"Authorization": f"Bearer {creds.get_access_token().access_token}"}
+    resp = requests.get(download_url, headers=headers)
+    if resp.status_code == 200:
+        # отправляем как документ .xlsx
+        return await update.message.reply_document(
+            document=resp.content,
+            filename="promo_codes.xlsx",
+            parse_mode=None
+        )
+    else:
+        return await update.message.reply_text(FILE_NOT_FOUND)
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(CommandHandler("download", download_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_password))
+    # Обработка любого текста после пароля: выдача промокода
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_username))
     app.run_polling()
 
 if __name__ == "__main__":
+    import json
     main()

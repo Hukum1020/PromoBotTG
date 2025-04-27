@@ -11,7 +11,7 @@ MEDIA_ID = os.getenv("MEDIA_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 DOWNLOAD_PASSWORD = os.getenv("DOWNLOAD_PASSWORD")  # Пароль для скачивания файла
 
-EXCEL_FILE = 'promo_codes.xlsx'
+EXCEL_FILE = 'promo_codes_test.xlsx'
 SHEET_NAME = 'Лист1'
 
 # Сообщения

@@ -5,13 +5,13 @@ from openpyxl import load_workbook
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-# Переменные окружения
+# Переменные из окружения
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 MEDIA_ID = os.getenv("MEDIA_ID")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 EXCEL_FILE = 'promo_codes_test.xlsx'
-SHEET_NAME = 'Sheet1'
+SHEET_NAME = 'Лист1'  # Имя листа как в твоём файле
 
 # Сообщения
 START_MESSAGE = """Привет! 👋  
@@ -43,25 +43,25 @@ FAIL_MESSAGE = """😕 Ты не выполнил все условия.
 🔁 Когда всё будет готово — просто отправь мне свой ник снова. Я проверю ещё раз!
 """
 
-# Загрузка свободных промокодов
+# Загружаем свободные промокоды
 def load_promo_codes():
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
     codes = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        code, status = row[0], row[1]
-        if code and (status is None or str(status).lower() != "used"):
-            codes.append(code)
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        code_cell, _, _, status_cell = row[:4]  # учитываем 4 колонки: A, B, C, D
+        if code_cell.value and (status_cell.value is None or str(status_cell.value).lower() != "used"):
+            codes.append(code_cell.value)
     wb.close()
     return codes
 
-# Пометка промокода как использованного
-def mark_code_as_used(code):
+# Отмечаем промокод как использованный
+def mark_code_as_used(selected_code):
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
     for row in ws.iter_rows(min_row=2):
-        if row[0].value == code:
-            row[1].value = "used"
+        if row[0].value == selected_code:
+            row[3].value = "used"  # Пишем в колонку D
             break
     wb.save(EXCEL_FILE)
     wb.close()
@@ -75,24 +75,15 @@ def has_user_commented(username):
         'limit': 100
     }
     while url:
-        try:
-            print(f"[INFO] Запрос к Instagram API: {url}")
-            response = requests.get(url, params=params)
-            print(f"[INFO] Ответ: {response.status_code} | {response.text}")
-            data = response.json()
-
-            for comment in data.get('data', []):
-                if comment['username'].lower() == username.lower():
-                    print(f"[INFO] Комментарий найден от @{username}")
-                    return True
-
-            url = data.get('paging', {}).get('next')
-        except Exception as e:
-            print(f"[ERROR] Ошибка при обращении к Instagram API: {e}")
-            return False
+        response = requests.get(url, params=params)
+        data = response.json()
+        for comment in data.get('data', []):
+            if comment['username'].lower() == username.lower():
+                return True
+        url = data.get('paging', {}).get('next')
     return False
 
-# Обработка Telegram-сообщений
+# Обработка сообщений от пользователя в Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("started"):
         await update.message.reply_text(START_MESSAGE)
@@ -117,14 +108,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(FAIL_MESSAGE)
 
-# Запуск бота
+# Запуск Telegram-бота
 def run_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("[INFO] Бот запущен.")
-    print("ACCESS_TOKEN:", ACCESS_TOKEN)
-    print("MEDIA_ID:", MEDIA_ID)
-
     app.run_polling()
 
 if __name__ == '__main__':

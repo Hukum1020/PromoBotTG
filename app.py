@@ -175,6 +175,7 @@ def main():
     setup_logging()
     sheet = init_sheet()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.bot.delete_webhook(drop_pending_updates=True)
     register_handlers(app, sheet)
     app.run_polling()
 

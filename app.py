@@ -102,7 +102,6 @@ def register_handlers(app, sheet):
 
     # /start
     async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # сбросим флаги
         context.user_data.clear()
         await update.message.reply_text(START_MESSAGE)
         await update.message.reply_text(ASK_USERNAME)
@@ -120,10 +119,12 @@ def register_handlers(app, sheet):
         if context.user_data.get("awaiting_password"):
             context.user_data["awaiting_password"] = False
             if text == DOWNLOAD_PASSWORD:
-                # скачиваем xlsx
-                url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
-                token = sheet.client.auth.access_token
-                r = requests.get(url, headers={"Authorization": f"Bearer {token}"})
+                # скачиваем xlsx напрямую из Google Sheets
+                export_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=xlsx"
+                # получаем свежий access token
+                creds = sheet.client.auth
+                access_token = creds.get_access_token().access_token
+                r = requests.get(export_url, headers={"Authorization": f"Bearer {access_token}"})
                 if r.status_code == 200:
                     await update.message.reply_document(
                         document=r.content, filename="promo_codes.xlsx"
@@ -134,7 +135,7 @@ def register_handlers(app, sheet):
                 await update.message.reply_text(WRONG_PASS)
             return
 
-        # 2) если это команда (но не /start или /download) — игнорируем
+        # 2) если команда (не /start, не /download), игнорируем
         if text.startswith("/"):
             return
 

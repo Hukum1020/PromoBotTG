@@ -71,7 +71,7 @@ def mark_code_as_used(row: int, username: str):
 
 # ─── ФУНКЦИЯ ПРОВЕРКИ КОММЕНТАРИЯ В INSTAGRAM ──────────────────────────────────
 def has_user_commented(username: str) -> bool:
-    url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments"
+    url = f"https://graph.facebook.com/v19.0/{MEDIA_ID}/comments?fields=username,text"
     params = {
         "access_token": ACCESS_TOKEN,
         "fields": "owner.username,text",

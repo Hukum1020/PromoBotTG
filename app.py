@@ -60,6 +60,18 @@ def load_promo_codes():
     wb.close()
     return codes
 
+def find_existing_code(username):
+    wb = load_workbook(EXCEL_FILE)
+    ws = wb[SHEET_NAME]
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        code_cell, used_cell = row[0], row[3]
+        if used_cell.value and used_cell.value.lower() == username.lower():
+            code_value = code_cell.value
+            wb.close()
+            return code_value
+    wb.close()
+    return None
+
 def mark_code_as_used(row_number, username):
     wb = load_workbook(EXCEL_FILE)
     ws = wb[SHEET_NAME]
@@ -99,11 +111,11 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    # Если ожидаем ввод пароля
     if context.user_data.get('awaiting_password'):
         if text == DOWNLOAD_PASSWORD:
             if os.path.exists(EXCEL_FILE):
-                await update.message.reply_document(InputFile(EXCEL_FILE))
+                with open(EXCEL_FILE, 'rb') as file:
+                    await update.message.reply_document(InputFile(file, filename="promo_codes.xlsx"))
             else:
                 await update.message.reply_text(FILE_NOT_FOUND_MESSAGE)
         else:
@@ -111,7 +123,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['awaiting_password'] = False
         return
 
-    # Работа с никнеймами
     if not context.user_data.get("started"):
         await start_command(update, context)
         return
@@ -120,16 +131,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Проверяю комментарий от @{username}…")
 
     if has_user_commented(username):
-        promo_codes = load_promo_codes()
-        if promo_codes:
-            selected_code, row_number = random.choice(promo_codes)
-            mark_code_as_used(row_number, username)
+        existing_code = find_existing_code(username)
+        if existing_code:
             await update.message.reply_text(
-                SUCCESS_MESSAGE_TEMPLATE.format(promo_code=selected_code),
+                SUCCESS_MESSAGE_TEMPLATE.format(promo_code=existing_code),
                 parse_mode='Markdown'
             )
         else:
-            await update.message.reply_text("😔 Промокоды закончились.")
+            promo_codes = load_promo_codes()
+            if promo_codes:
+                selected_code, row_number = random.choice(promo_codes)
+                mark_code_as_used(row_number, username)
+                await update.message.reply_text(
+                    SUCCESS_MESSAGE_TEMPLATE.format(promo_code=selected_code),
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text("😔 Промокоды закончились.")
     else:
         await update.message.reply_text(FAIL_MESSAGE)
 
